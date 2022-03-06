@@ -1,0 +1,440 @@
+---
+title: "Final Project - Terrorism Around the World"
+author: "Itamar K"
+date: "24/06/2021"
+output:
+  html_document:
+    number_sections: false
+    theme: readable
+    highlight: pygments
+---
+
+![an image caption source: sinwar](sinwar.jpg)
+
+### Introduction ###
+
+In this project, I will use [this](https://www.kaggle.com/START-UMD/gtd) dataset of terrorism attacks around the globe. After importing the dataset, the work progress will be tidying, doing data transformations, data visualizations and then modeling. My goal is to learn a little bit about where terrorism hits and when, and to understand more when it is more dangerous. Specifically, I will try to answer these two research questions:
+
+1. Is there a correlation between weather seasons and the type of the attacks?
+
+2. Are civilian targeted attacks as deadly as governmental targeted attacks?
+
+
+### Let's start ###
+
+First, lets load the libraries we are going to need:
+
+```{r}
+suppressWarnings(suppressMessages(library(tidyverse)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(lubridate)))
+suppressWarnings(suppressMessages(library(dplyr)))
+suppressWarnings(suppressMessages(library(ggpubr)))
+suppressWarnings(suppressMessages(library(treemap)))
+suppressWarnings(suppressMessages(library(RColorBrewer)))
+suppressWarnings(suppressMessages(library(corrplot)))
+```
+
+Data import:
+
+```{r}
+suppressWarnings(suppressMessages(t_data <- read_csv("globalterrorismdb_0718dist.csv")))
+```
+
+First look at the data:
+
+```{r}
+glimpse(t_data)
+```
+
+We can see that there are a lot of variables in this dataset, most of them are not useful and it is really hard to learn about the data that way. We will narrow down the number of columns and have a second look.
+
+We can also see that there are plenty of missing values. We will deal with that too, soon.
+
+```{r}
+r_data <- t_data %>%
+  select(2,3,4,9,11,13,14,15,27,28,30,36,83,99,102)
+```
+
+Renaming some variables to make the data more readable:
+
+```{r}
+r_data <- r_data %>% 
+  rename(
+    country = country_txt,
+    region = region_txt,
+    kill = nkill,
+    wound = nwound,
+    weapon_type = weaptype1_txt,
+    attack_type = attacktype1_txt,
+    target_type = targtype1_txt
+    )
+```
+
+Now, let's re-format the dates into one column, date type:
+
+```{r}
+# Removing bad values
+r_data <- r_data %>%
+  filter(imonth > 0 & imonth <= 12 & iday > 0 & iday <= 31)
+
+# Creating the new date variable
+r_data$date <- as.Date(with(r_data, paste(iyear, imonth, iday,sep="-")), "%Y-%m-%d") 
+
+# Removing former date columns
+r_data <- r_data %>%
+  subset(select = -c(1,2,3))
+
+# Moving the new variable to be the first
+r_data <- r_data %>% relocate(date, .before = country)
+```
+
+Now that the dataset is much more readable, we can start learning about it.
+
+```{r}
+view(r_data)
+str(r_data)
+```
+
+Let's check in which variables we have NA values:
+
+```{r}
+colnames(r_data)[colSums(is.na(r_data)) > 0]
+```
+
+And lose these rows:
+
+```{r}
+r_data <- (r_data) %>%
+  filter(!is.na(longitude) & !is.na(latitude) & !is.na(city) & !is.na(kill) & !is.na(wound))
+```
+
+```{r}
+summary(r_data)
+```
+
+Few things we can say so far:
+We have many character variables, describing the location and the nature of the attacks.
+A very few of the attacks were suicidal. Also, the range of kill and wound is huge. That is because there are attacks with 0 wounded/killed and there are attacks with thousands of casualties.
+We can see that most of the attacks were, in fact, successful. Let's try and see how success is measured:
+
+```{r}
+r_data %>%
+  count(success, wound, kill, sort=T)
+```
+
+Success=1 even with zero wounded/killed. I decided to look it up in the source of this database and here is what I found:
+Every observation in this data meets the condition that the attackers were at least on their way to execute the attack. Whether an attack is considered successful depends on the type of the attack but it is not dependent on whether there were casualties, nor even damage to a facility/structure. For example - if a bomb went off in a building it will be considered successful even if no one was hurt and the building was still standing.
+
+Let's see a little bit how the attacks are distributed around the globe. We'll start with longitude distribution:
+
+```{r}
+ggplot(r_data, aes(longitude)) + geom_density(color="red1", fill="lightskyblue") # Plot
+```
+
+Remove bad values and plot again:
+
+```{r}
+# Removing values that are outside the correct range of longitude
+r_data <- r_data %>%
+  filter(longitude >= -180 & longitude <= 180)
+
+ggplot(r_data, aes(longitude)) + geom_density(color="red1",  fill="lightskyblue") # Plot
+```
+
+We can clearly see that most of the attacks occurred east to the -20 line which is approximately where Europe and Africa come in touch with the Atlantic ocean.
+
+Let's see how it looks on an actual map:
+
+```{r}
+# Creating data frame for the world map
+world <- map_data("world")
+
+ggplot() +
+  geom_map(
+    data = world, map = world,
+    aes(long, lat, map_id = region),
+    color = "black", fill = "black", size = 0.1) +
+  geom_point(
+    data = r_data,
+    aes(longitude, latitude),
+    shape=".", color = "red") +
+  theme(panel.background = element_rect(fill = "lightblue"), plot.background = element_rect(fill = "lightblue")) + xlab("Longitude") + ylab("Latitude") # Plot
+```
+
+It looks like the more an area is populated and dense the more attacks take place, which makes sense :)
+
+Let's also see how the locations in which people were killed in these attacks have changed over the years:
+
+```{r}
+# Creating a new dataframe - how many were killed by year and region
+dfry <- r_data %>% filter(kill > 0) %>% group_by(year(date),region) %>% summarise(kills = sum(kill)) %>% ungroup() 
+
+colnames(dfry)<-c("Year","Region","Killed") # Renaming variables
+
+ggplot(data = dfry, aes(x = Year, y = Killed, colour = Region)) + geom_point() + theme_bw() + geom_line() # Plot
+```
+
+The Middle East & North Africa has the biggest shift. I assume it is because the Iraq war and all the terror attacks that followed it. Unfortunately, Israel also contributes to this peak.
+
+Let's break down this peak to countries:
+
+```{r}
+# Creating a new dataframe - how many were killed by country after 2010
+dfc <- r_data %>% filter(kill > 0 & region=="Middle East & North Africa" & year(date) >= 2010) 
+
+treemap(dfc, index=c("country"), vSize = "kill", palette= "Paired", title="n-Killed in Middle East & North Africa Countries", fontsize.title = 12) # Plot
+```
+
+Just to explain - The bigger the area, the bigger the number of people killed since 2010 in those countries. Indeed, Iraq is the biggest one here.
+
+Ok, we will now start to work with latitude in order to advance towards answering the first research question. 
+
+```{r}
+ggplot(r_data, aes(latitude)) + geom_density(color="red1", fill="steelblue2") # Plot
+```
+
+We know that the seasons at the northern and southern hemispheres are opposite. For instance, while it is summer in the United States, it is winter in Australia. We know the latitude of the attacks and we also know the dates they occurred which makes it possible for us to know the season in which each attack happened.
+
+First, let's drop the area between the Tropic of Cancer (23.5 N to the equator) and the Tropic of Capricorn (23.5 S to the equator). I decided to do this because this area has a tropical weather and the changes in temperatures throughout the year are not significant enough.
+
+```{r}
+s_data <- r_data %>%
+  filter(latitude >= 23.5 | latitude <= -23.5)
+```
+
+This function will help us determine in which season every observation took place by two parameters - month and hemisphere:
+
+```{r}
+get_season <- function(month, hemisphere){
+if (hemisphere == "north") {
+  if(month %in% c(3,4,5)) return("Spring")
+  if(month %in% c(6,7,8)) return("Summer")
+  if(month %in% c(9,10,11)) return("Autumn")
+  if(month %in% c(12,1,2)) return("Winter")
+}
+else {
+  if(month %in% c(3,4,5)) return("Autumn")
+  if(month %in% c(6,7,8)) return("Winter")
+  if(month %in% c(9,10,11)) return("Spring")
+  if(month %in% c(12,1,2)) return("Summer")
+}}
+```
+
+Now, let's get the seasons and implement them in two data sets, one for each hemisphere:
+
+```{r}
+# New dataframe for northern hemisphere with date, country and attack_type variables
+northern <- s_data %>% filter(latitude > 0) %>% select(c(1,2,9))
+
+# Adding the season column
+northern$season = lapply(month(northern$date), get_season, "north")
+
+# New dataframe for southern hemisphere with date, country and attack_type variables
+southern <- s_data %>% filter(latitude < 0) %>% select(c(1,2,9))
+
+# Adding the season column
+southern$season = lapply(month(southern$date), get_season, "south")
+```
+
+And now unite them back:
+
+```{r}
+s_data <- rbind(northern, southern)
+s_data$season = as.character(s_data$season)
+```
+
+Let's see how many attacks happened in each season, numerically:
+
+```{r}
+# Creating the dataframe
+dfs <- s_data %>% group_by(season) %>% 
+  summarise(n = length(season)) %>% ungroup()
+
+ggplot(data = dfs, aes(x = season, y = n, fill=season)) +  
+  geom_bar(stat="identity") + 
+  scale_fill_manual(values = c("Summer"="firebrick4","Spring" = "goldenrod3","Autumn" = "darkslategray4","Winter" = "royalblue3")) + 
+  coord_flip() + theme_bw(base_size = 12) +
+  labs(x ="Seasons", y = "Number of events") + geom_text(aes(label=n), size=4, position = position_stack(vjust = 0.5)) # Plot
+```
+
+We can see that in spring and summer we have more attacks than in winter and autumn.
+
+We wanted to check if the attacks type is dependent on the season weather so we'll move on to remove unknown values because they should be considered as NA values (which chi test is ignoring) and not as a category.
+
+```{r}
+s_data <- s_data %>%
+  filter(!attack_type=="Unknown")
+```
+
+These are our hypothesizes for the chi-test we are about to do: 
+
+#Null hypothesis:
+$$H_0: P(Season_i\cap Type_j)=P(Season_i)*(Type_j)$$
+#Alternative hypothesis:
+$$H_1: P(Season_i\cap Type_j) \neq P(Season_i)*(Type_j)$$
+
+Or in words - The chi-test is going to tell us whether these two categories are independent or not. The p-value that will be returned will be compared to our significance level. Since we want a 95% confidence level, the significance level is going to be 0.05.
+
+```{r}
+chisq <- chisq.test(s_data$attack_type, s_data$season)
+chisq
+```
+
+Yes. p-value is practically 0, way below 0.05 which is our significance level. We reject H0 and we can say that season and attack type are, in fact, associated and not independent. Let's look at the residuals:
+
+```{r}
+corrplot(chisq$residuals, is.cor = FALSE) # Plot
+```
+
+Few interesting things to see here:
+Armed assault is positively associated with autumn and summer (blue) but not with winter where it is negatively associated (red).
+On the other hand, bombing is associated with winter but not with autumn. And for some reason, terrorists are really soft during spring with high association between this season and unarmed assaults.
+
+Ok, now that we have our first model, we can move on.
+I was curious how much capital cities play a role here, so I searched for another dataset, here it is:
+
+```{r}
+suppressWarnings(suppressMessages(capitals <- read_csv("country-list.csv")))
+```
+
+```{r}
+glimpse(capitals)
+```
+
+This dataset tells the capital city of every country.
+
+```{r}
+capitals %>%
+  distinct(type)
+```
+
+A variable that mentions that each and every observation is a capital city (in a capital cities db) is probably not necessary :)
+
+```{r}
+capitals <-
+  capitals %>%
+  select(1:2) 
+```
+
+Merging it with the our original dataset:
+
+```{r}
+merged <- left_join(r_data %>% select(2,4), capitals)
+```
+
+Checking for blank observations:
+
+```{r}
+merged %>%
+  filter(is.na(capital)) %>%
+  group_by(country) %>%
+  count(sort=T)
+```
+
+We will manually fill missing values for countries that have 100 attacks or more and lose all the others:
+
+```{r}
+merged[merged$country %in% "United Kingdom",]$capital <- 'London'
+merged[merged$country %in% "West Bank and Gaza Strip",]$capital <- 'Jerusalem' # These terror attacks targeted Israelis, therefore I decided to refer to them as if they happened in Israel.
+merged[merged$country %in% "West Germany (FRG)",]$capital <- 'West Berlin'
+merged[merged$country %in% "Yugoslavia",]$capital <- 'Belgrade'
+merged[merged$country %in% "Bosnia-Herzegovina",]$capital <- 'Sarajevo'
+merged[merged$country %in% "United States",]$capital <- 'Washington, D.C.' # This value wasn't actually missing but was written differently ("Washington")
+
+# Removing NA or "Unknown" values
+merged <- merged %>%
+  filter(!is.na(capital)) %>%
+  filter(!city=="Unknown")
+```
+
+Creating a new column - A logical variable - Is the city in which the attack took place a capital city?
+
+```{r}
+merged$is_capital <- merged$city == merged$capital
+```
+
+Now we can see how it divides:
+
+```{r}
+merged %>%
+  count(is_capital)
+```
+
+Interesting, we see that a little less than 20% of the attacks occurred in a capital city. For some reason I assumed it would be higher.
+
+
+Now, let's advance towards answering the second research question which is:
+
+Are civilian targeted attacks as deadly as governmental targeted attacks?
+
+First, we will divide all the targets into our two categories - civilian and governmental. Some target types will be excluded because it is impossible to determine to which category they belong.
+
+```{r}
+# Removing the target types which we can not determine to which category they belong
+r_data <- r_data %>%
+  filter(!target_type=="Unknown" & !target_type=="Terrorists/Non-State Militia" & !target_type=="Violent Political Party" & !target_type=="Other" & !target_type=="Maritime" & !target_type=="Educational Institution" & !target_type=="Airports & Aircraft")
+
+# Categorizing
+r_data <- r_data %>%
+  mutate(target_category = ifelse(r_data$target_type %in% c('Private Citizens & Property','Business','Transportation', 'Religious Figures/Institutions', 'Journalists & Media', 'Abortion Related','Tourists', 'NGO','Telecommunication'), "Civilian", "Governmental"))
+```
+
+A glimpse at the two categories:
+
+```{r}
+r_data %>% group_by(target_category) %>%
+  summarise(
+    count = n(),
+    mean = mean(kill, na.rm = TRUE),
+    median = median(kill),
+    sd = sd(kill, na.rm = TRUE)
+  )
+```
+
+We see that for both categories the mean and the median are pretty far away from each other. The explanation might be that a few attacks, with a very high number of murdered victims are pulling the average higher. For example, if we filter out 9/11 in which we had attacks with over thousand killed, we will see the mean decreases but the median will remain the same: 
+
+```{r}
+r_data %>% group_by(target_category) %>% filter(!(year(date)==2001 & month(date)==9 & day(date)==11)) %>%
+  summarise(
+    count = n(),
+    mean = mean(kill, na.rm = TRUE),
+    median = median(kill),
+    sd = sd(kill, na.rm = TRUE)
+  )
+```
+
+The decrease is expressed in the sd as well, for the same reason.
+
+Boxplotting:
+
+```{r}
+ggboxplot(r_data, x = "target_category", y = "kill", 
+          color = "target_category", palette = c("#00AFBB", "#E7B800"),
+        ylab = "Killed", xlab = "Target", ylim = c(0, 10)) # Plot
+```
+
+The boxplot shows the 75th percentile and the 25th percentile (the upper and lower edges of the box, respectively) which seem to have almost the same values. The median is the line between them and in the civilian category it is equal to 0 as we saw above. Since we can not see the mean here it seems like attacks against governmental targets are deadlier. The t-test will be using the mean to answer our question. 
+
+These are our two hypothesizes:
+
+#Null hypothesis:
+$$H_0: \mu_{K_{Civilian}}- \mu_{K_{Governmental}}=0$$
+#Alternative hypothesis:
+$$H_1: \mu_{K_{Civilian}}- \mu_{K_{Governmental}}\neq0$$
+
+Or in words - the t-test is going to tell us whether the means of our two categories are equal or not in a 95% confidence level. For that reason we are using a two-sided test.
+We are going to assume that both categories are sampled from normal distributions with equal variance.
+
+```{r}
+t.test(kill ~ target_category, data = r_data, alternative = "two.sided", var.equal = FALSE)
+```
+
+Yes, we got p-value < 0.05, therefore we reject H0 and we can say that the difference in mean is not 0, the mean of civilian is higher and therefore we can determine that attacks against civilian targets are deadlier. Perhaps that is because that governmental targets are more secured but that's a question for another project :)
+
+
+### Conclusion ###
+
+In conclusion, in this project we saw that seasons influence the type of the attacks. For example, explosion type attacks are associated with winter. We also saw that if an attack targets civilians - it is more deadly. In spite of that two conclusions I wouldn't advise to stay home during any season or to hang as much as possible in your city hall building. Just live your life :)
+
+
