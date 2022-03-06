@@ -1,4 +1,4 @@
-# Date-Analysis-Terrorism-Around-the-Globe
+# Data-Analysis-Terrorism-Around-the-Globe
 
 This is my Data Analysis course final project in my B.Sc at TAU.
 
